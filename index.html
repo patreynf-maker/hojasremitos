@@ -192,27 +192,6 @@
     padding-bottom:10px;
     border-bottom:2px solid var(--ink);
   }
-  .mode-options{
-    display:flex;
-    flex-direction:column;
-    gap:10px;
-  }
-  .mode-option{
-    display:flex;
-    align-items:center;
-    gap:10px;
-    font-size:14px;
-    cursor:pointer;
-    padding:10px 12px;
-    border:1px solid var(--line);
-    background:#fff;
-    transition:border-color .15s, background .15s;
-  }
-  .mode-option:has(input:checked){
-    border-color:var(--diesel);
-    background:#f1f7f3;
-  }
-  .mode-option input{ accent-color:var(--diesel-dark); }
   a.download-btn{
     display:block;
     text-align:center;
@@ -263,42 +242,22 @@
     <div class="count-badge" id="countBadge">0 números cargados</div>
   </section>
 
-  <section data-step="3 · SALIDA">
-    <label class="field-label">Cómo entregar las hojas</label>
-    <div class="mode-options">
-      <label class="mode-option">
-        <input type="radio" name="outputMode" value="separate" checked>
-        <span>Un PDF por cliente (comprimidos en un .zip)</span>
-      </label>
-      <label class="mode-option">
-        <input type="radio" name="outputMode" value="single">
-        <span>Un solo PDF con todas las hojas juntas</span>
-      </label>
-    </div>
-  </section>
-
   <button class="run" id="runBtn" disabled>Extraer páginas</button>
   <div class="status" id="status"></div>
 
   <div class="results" id="results">
-    <section data-step="4 · RESULTADO">
+    <section data-step="3 · RESULTADO">
       <div class="summary-line" id="summaryLine"></div>
       <div id="resultList"></div>
-      <a href="#" class="download-btn" id="downloadBtn" download="clientes_extraidos.pdf">Descargar</a>
+      <a href="#" class="download-btn" id="downloadBtn" download="clientes_extraidos.pdf">Descargar PDF extraído</a>
     </section>
   </div>
 
   <div class="foot">El PDF se procesa localmente en tu navegador — no se sube a ningún servidor</div>
 </div>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script>
-if (typeof pdfjsLib === 'undefined' && window['pdfjs-dist/build/pdf']) {
-  window.pdfjsLib = window['pdfjs-dist/build/pdf'];
-}
-if (window.pdfjsLib) {
-  pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
-}
+pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 
 const dropzone = document.getElementById('dropzone');
 const fileInput = document.getElementById('fileInput');
@@ -375,36 +334,6 @@ runBtn.addEventListener('click', async () => {
     const pdfDoc = await loadingTask.promise;
     const totalPages = pdfDoc.numPages;
 
-    // Reconstructs reading-order lines from pdf.js text items using their
-    // real position on the page (pdf.js returns items in content-stream
-    // order, which is NOT necessarily reading order, so joining items with
-    // spaces directly can scramble labels and values that are far apart
-    // in the stream but close together visually).
-    function reconstructLines(textContent) {
-      const items = textContent.items
-        .filter(it => it.str && it.str.trim().length > 0)
-        .map(it => ({ str: it.str, x: it.transform[4], y: it.transform[5] }));
-      items.sort((a, b) => (b.y - a.y) || (a.x - b.x));
-      const lines = [];
-      let current = null;
-      const Y_TOL = 2.5;
-      for (const it of items) {
-        if (current && Math.abs(current.y - it.y) <= Y_TOL) {
-          current.parts.push(it);
-        } else {
-          current = { y: it.y, parts: [it] };
-          lines.push(current);
-        }
-      }
-      return lines.map(l => l.parts.sort((a, b) => a.x - b.x).map(p => p.str).join(' ').replace(/\s+/g, ' ').trim());
-    }
-
-    // Client header lines look like: "Cliente : 866 (A) VARELA MARIANA CANDIDA"
-    // or "Cliente : 17 (A) BALCARCE AUTOS SA" — the literal label "Cliente :",
-    // a client number, a branch letter in parentheses, then the client name,
-    // all on their own line once reconstructed by real page position.
-    const HEADER_RE = /^Cliente\s*:\s*(\d{1,6})\s*\(([AB])\)\s*(.+)$/;
-
     // Map: client number -> { name, pages: [pageIndexZeroBased,...] }
     const clientMap = new Map();
     let currentClient = null;
@@ -413,17 +342,12 @@ runBtn.addEventListener('click', async () => {
       statusEl.textContent = `Escaneando página ${i} de ${totalPages}…`;
       const page = await pdfDoc.getPage(i);
       const textContent = await page.getTextContent();
-      const lines = reconstructLines(textContent);
+      const pageText = textContent.items.map(it => it.str).join(' ');
 
-      let headerFound = null;
-      for (const line of lines) {
-        const m = line.match(HEADER_RE);
-        if (m) { headerFound = m; break; }
-      }
-
-      if (headerFound) {
-        const num = headerFound[1];
-        const name = headerFound[3].trim();
+      const match = pageText.match(/Cliente\s*:\s*(\d+)\s*(?:\(([A-Z])\))?\s*([^\n]*?)(?:Legajo|Fecha Comprobante)/);
+      if (match) {
+        const num = match[1];
+        const name = (match[3] || '').trim();
         currentClient = num;
         if (!clientMap.has(num)) clientMap.set(num, { name: name, pages: [] });
         clientMap.get(num).pages.push(i - 1);
@@ -433,59 +357,28 @@ runBtn.addEventListener('click', async () => {
       }
     }
 
-    statusEl.textContent = 'Armando el archivo con las páginas seleccionadas…';
+    statusEl.textContent = 'Armando el PDF con las páginas seleccionadas…';
 
     const srcDoc = await PDFLib.PDFDocument.load(pdfArrayBuffer);
+    const outDoc = await PDFLib.PDFDocument.create();
 
     const found = [];
     const missing = [];
+    let pageIndicesToCopy = [];
 
     for (const num of wanted) {
       if (clientMap.has(num)) {
-        found.push({ num, ...clientMap.get(num) });
+        const info = clientMap.get(num);
+        found.push({ num, name: info.name });
+        pageIndicesToCopy.push(...info.pages);
       } else {
         missing.push(num);
       }
     }
 
-    const outputMode = document.querySelector('input[name="outputMode"]:checked').value;
-    const baseName = pdfFileName.replace(/\.pdf$/i, '');
-
-    function safeName(num, name) {
-      const clean = (name || '').replace(/[\\/:*?"<>|]+/g, '').trim().replace(/\s+/g, ' ');
-      return (clean ? `${num} - ${clean}` : `${num}`).slice(0, 80);
-    }
-
-    let totalPagesCopied = 0;
-    let downloadUrl = null;
-    let downloadName = '';
-
-    if (outputMode === 'separate') {
-      const zip = new JSZip();
-      for (const client of found) {
-        const outDoc = await PDFLib.PDFDocument.create();
-        const copiedPages = await outDoc.copyPages(srcDoc, client.pages);
-        copiedPages.forEach(p => outDoc.addPage(p));
-        totalPagesCopied += client.pages.length;
-        const bytes = await outDoc.save();
-        zip.file(safeName(client.num, client.name) + '.pdf', bytes);
-      }
-      const zipBlob = await zip.generateAsync({ type: 'blob' });
-      downloadUrl = URL.createObjectURL(zipBlob);
-      downloadName = baseName + '_extraido.zip';
-    } else {
-      const outDoc = await PDFLib.PDFDocument.create();
-      let pageIndicesToCopy = [];
-      for (const client of found) pageIndicesToCopy.push(...client.pages);
-      if (pageIndicesToCopy.length > 0) {
-        const copiedPages = await outDoc.copyPages(srcDoc, pageIndicesToCopy);
-        copiedPages.forEach(p => outDoc.addPage(p));
-      }
-      totalPagesCopied = pageIndicesToCopy.length;
-      const outBytes = await outDoc.save();
-      const blob = new Blob([outBytes], { type: 'application/pdf' });
-      downloadUrl = URL.createObjectURL(blob);
-      downloadName = baseName + '_extraido.pdf';
+    if (pageIndicesToCopy.length > 0) {
+      const copiedPages = await outDoc.copyPages(srcDoc, pageIndicesToCopy);
+      copiedPages.forEach(p => outDoc.addPage(p));
     }
 
     resultList.innerHTML = '';
@@ -502,12 +395,15 @@ runBtn.addEventListener('click', async () => {
       resultList.appendChild(row);
     }
 
-    summaryLine.textContent = `${found.length} de ${wanted.length} clientes encontrados · ${totalPagesCopied} páginas extraídas de ${totalPages} totales`;
+    summaryLine.textContent = `${found.length} de ${wanted.length} clientes encontrados · ${pageIndicesToCopy.length} páginas extraídas de ${totalPages} totales`;
 
-    if (found.length > 0) {
-      downloadBtn.href = downloadUrl;
-      downloadBtn.download = downloadName;
-      downloadBtn.textContent = outputMode === 'separate' ? 'Descargar .zip (un PDF por cliente)' : 'Descargar PDF extraído';
+    if (pageIndicesToCopy.length > 0) {
+      const outBytes = await outDoc.save();
+      const blob = new Blob([outBytes], { type: 'application/pdf' });
+      const url = URL.createObjectURL(blob);
+      downloadBtn.href = url;
+      const baseName = pdfFileName.replace(/\.pdf$/i, '');
+      downloadBtn.download = baseName + '_extraido.pdf';
       downloadBtn.style.display = 'block';
     } else {
       downloadBtn.style.display = 'none';
